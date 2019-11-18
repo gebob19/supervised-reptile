@@ -6,9 +6,11 @@ datasets.
 import random
 
 import tensorflow as tf
+import pickle
 
 from .variables import (interpolate_vars, average_vars, subtract_vars, add_vars, scale_vars,
                         VariableState)
+
 
 class Reptile:
     """
@@ -26,6 +28,10 @@ class Reptile:
                                          tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES))
         self._transductive = transductive
         self._pre_step_op = pre_step_op
+        self.count = 0
+        self.valcount = {'train': 0,
+                        'val': 0, 
+                        'test': 0}
 
     # pylint: disable=R0913,R0914
     def train_step(self,
@@ -59,22 +65,54 @@ class Reptile:
           meta_step_size: interpolation coefficient.
           meta_batch_size: how many inner-loops to run.
         """
+        # print('------------------')
+        # print(num_classes,
+        #            num_shots,
+        #            inner_batch_size,
+        #            inner_iters,
+        #            replacement,
+        #            meta_step_size,
+        #            meta_batch_size)
+
+        # 5 10 10 5 False 0.99989 5
+
+        total_inputs = []
+        total_labels = []
+
         old_vars = self._model_state.export_variables()
         new_vars = []
         for _ in range(meta_batch_size):
             mini_dataset = _sample_mini_dataset(dataset, num_classes, num_shots)
+            
+            # record
+            batch_inputs, batch_labels = [], []
+            
             for batch in _mini_batches(mini_dataset, inner_batch_size, inner_iters, replacement):
                 inputs, labels = zip(*batch)
                 if self._pre_step_op:
                     self.session.run(self._pre_step_op)
                 self.session.run(minimize_op, feed_dict={input_ph: inputs, label_ph: labels})
+
+                # record
+                batch_inputs.append(inputs)
+                batch_labels.append(labels)
+
+            # record 
+            total_inputs.append(batch_inputs)
+            total_labels.append(batch_labels)
+
             new_vars.append(self._model_state.export_variables())
             self._model_state.import_variables(old_vars)
         new_vars = average_vars(new_vars)
         self._model_state.import_variables(interpolate_vars(old_vars, new_vars, meta_step_size))
 
+        # save 
+        self.count += 1
+        with open("./train/training"+str(self.count), "wb") as f:            
+            pickle.dump([total_inputs, total_labels], f)
+
     def evaluate(self,
-                 dataset,
+                 dataset, 
                  input_ph,
                  label_ph,
                  minimize_op,
@@ -83,7 +121,7 @@ class Reptile:
                  num_shots,
                  inner_batch_size,
                  inner_iters,
-                 replacement):
+                 replacement, name='val'):
         """
         Run a single evaluation of the model.
 
@@ -112,14 +150,30 @@ class Reptile:
         train_set, test_set = _split_train_test(
             _sample_mini_dataset(dataset, num_classes, num_shots+1))
         old_vars = self._full_state.export_variables()
+
+        train_inputs = []
+        train_labels = []
+
         for batch in _mini_batches(train_set, inner_batch_size, inner_iters, replacement):
             inputs, labels = zip(*batch)
+
+            train_inputs.append(inputs)
+            train_labels.append(labels)
+
             if self._pre_step_op:
                 self.session.run(self._pre_step_op)
             self.session.run(minimize_op, feed_dict={input_ph: inputs, label_ph: labels})
         test_preds = self._test_predictions(train_set, test_set, input_ph, predictions)
         num_correct = sum([pred == sample[1] for pred, sample in zip(test_preds, test_set)])
+
+        test_inputs, test_labels = zip(*test_set)
+
         self._full_state.import_variables(old_vars)
+
+        self.valcount[name] += 1
+        with open("./evaluation/{}/".format(name)+str(self.valcount[name]), "wb") as f:            
+            pickle.dump([train_inputs, train_labels, test_inputs, test_labels], f)
+
         return num_correct
 
     def _test_predictions(self, train_set, test_set, input_ph, predictions):

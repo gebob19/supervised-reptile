@@ -50,9 +50,12 @@ def train(sess,
     test_writer = tf.summary.FileWriter(os.path.join(save_dir, 'test'), sess.graph)
     tf.global_variables_initializer().run()
     sess.run(tf.global_variables_initializer())
+
+
     for i in range(meta_iters):
         frac_done = i / meta_iters
         cur_meta_step_size = frac_done * meta_step_size_final + (1 - frac_done) * meta_step_size
+        
         reptile.train_step(train_set, model.input_ph, model.label_ph, model.minimize_op,
                            num_classes=num_classes, num_shots=(train_shots or num_shots),
                            inner_batch_size=inner_batch_size, inner_iters=inner_iters,
@@ -60,18 +63,22 @@ def train(sess,
                            meta_step_size=cur_meta_step_size, meta_batch_size=meta_batch_size)
         if i % eval_interval == 0:
             accuracies = []
-            for dataset, writer in [(train_set, train_writer), (test_set, test_writer)]:
+            for dataset, writer, name in [(train_set, train_writer, 'train'), (test_set, test_writer, 'val')]:
                 correct = reptile.evaluate(dataset, model.input_ph, model.label_ph,
                                            model.minimize_op, model.predictions,
                                            num_classes=num_classes, num_shots=num_shots,
                                            inner_batch_size=eval_inner_batch_size,
-                                           inner_iters=eval_inner_iters, replacement=replacement)
+                                           inner_iters=eval_inner_iters, replacement=replacement,
+                                           name=name)
                 summary = sess.run(merged, feed_dict={accuracy_ph: correct/num_classes})
                 writer.add_summary(summary, i)
                 writer.flush()
                 accuracies.append(correct / num_classes)
             log_fn('batch %d: train=%f test=%f' % (i, accuracies[0], accuracies[1]))
+
         if i % 100 == 0 or i == meta_iters-1:
             saver.save(sess, os.path.join(save_dir, 'model.ckpt'), global_step=i)
         if time_deadline is not None and time.time() > time_deadline:
             break
+
+        if i == 1500: break 
