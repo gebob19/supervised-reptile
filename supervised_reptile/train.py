@@ -80,5 +80,3 @@ def train(sess,
             saver.save(sess, os.path.join(save_dir, 'model.ckpt'), global_step=i)
         if time_deadline is not None and time.time() > time_deadline:
             break
-
-        if i == 1500: break 
